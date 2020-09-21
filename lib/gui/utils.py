@@ -2,11 +2,14 @@
 """ Utility functions for the GUI """
 import logging
 import os
+import platform
 import sys
 import tkinter as tk
+
 from tkinter import filedialog
 from threading import Event, Thread
 from queue import Queue
+
 import numpy as np
 
 from PIL import Image, ImageDraw, ImageTk
@@ -17,6 +20,7 @@ from .project import Project, Tasks
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 _CONFIG = None
 _IMAGES = None
+_PREVIEW_TRIGGER = None
 PATHCACHE = os.path.join(os.path.realpath(os.path.dirname(sys.argv[0])), "lib", "gui", ".cache")
 
 
@@ -86,20 +90,21 @@ class FileHandler():  # pylint:disable=too-few-public-methods
 
     Parameters
     ----------
-    handletype: ['open', 'save', 'filename', 'filename_multi', 'savefilename', 'context']
+    handle_type: ['open', 'save', 'filename', 'filename_multi', 'savefilename', 'context', `dir`]
         The type of file dialog to return. `open` and `save` will perform the open and save actions
         and return the file. `filename` returns the filename from an `open` dialog.
         `filename_multi` allows for multi-selection of files and returns a list of files selected.
         `savefilename` returns the filename from a `save as` dialog. `context` is a context
-        sensitive parameter that returns a certain dialog based on the current options
-    filetype: ['default', 'alignments', 'config_project', 'config_task', 'config_all', 'csv', \
+        sensitive parameter that returns a certain dialog based on the current options. `dir` asks
+        for a folder location.
+    file_type: ['default', 'alignments', 'config_project', 'config_task', 'config_all', 'csv', \
                'image', 'ini', 'state', 'log', 'video']
         The type of file that this dialog is for. `default` allows selection of any files. Other
         options limit the file type selection
     title: str, optional
         The title to display on the file dialog. If `None` then the default title will be used.
         Default: ``None``
-    initialdir: str, optional
+    initial_folder: str, optional
         The folder to initially open with the file dialog. If `None` then tkinter will decide.
         Default: ``None``
     command: str, optional
@@ -123,15 +128,20 @@ class FileHandler():  # pylint:disable=too-few-public-methods
     '/path/to/selected/video.mp4'
     """
 
-    def __init__(self, handletype, filetype, title=None, initialdir=None, command=None,
+    def __init__(self, handle_type, file_type, title=None, initial_folder=None, command=None,
                  action=None, variable=None):
-        logger.debug("Initializing %s: (Handletype: '%s', filetype: '%s', title: '%s', "
-                     "initialdir: '%s, 'command: '%s', action: '%s', variable: %s)",
-                     self.__class__.__name__, handletype, filetype, title, initialdir, command,
-                     action, variable)
-        self._handletype = handletype
+        logger.debug("Initializing %s: (handle_type: '%s', file_type: '%s', title: '%s', "
+                     "initial_folder: '%s, 'command: '%s', action: '%s', variable: %s)",
+                     self.__class__.__name__, handle_type, file_type, title, initial_folder,
+                     command, action, variable)
+        self._handletype = handle_type
         self._defaults = self._set_defaults()
-        self._kwargs = self._set_kwargs(title, initialdir, filetype, command, action, variable)
+        self._kwargs = self._set_kwargs(title,
+                                        initial_folder,
+                                        file_type,
+                                        command,
+                                        action,
+                                        variable)
         self.retfile = getattr(self, "_{}".format(self._handletype.lower()))()
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -140,7 +150,7 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         """ dict: The accepted extensions for each file type for opening/saving """
         all_files = ("All files", "*.*")
         filetypes = {"default": (all_files,),
-                     "alignments": [("Faceswap Alignments", "*.fsa *.json"),
+                     "alignments": [("Faceswap Alignments", "*.fsa"),
                                     all_files],
                      "config_project": [("Faceswap Project files", "*.fsw"), all_files],
                      "config_task": [("Faceswap Task files", "*.fst"), all_files],
@@ -760,10 +770,11 @@ class Config():
     def __init__(self, root, cli_opts, statusbar, session):
         logger.debug("Initializing %s: (root %s, cli_opts: %s, statusbar: %s, session: %s)",
                      self.__class__.__name__, root, cli_opts, statusbar, session)
+        self._default_font = self._set_default_font()
         self._constants = dict(
             root=root,
             scaling_factor=self._get_scaling(root),
-            default_font=tk.font.nametofont("TkDefaultFont").configure()["family"])
+            default_font=self._default_font)
         self._gui_objects = dict(
             cli_opts=cli_opts,
             tk_vars=self._set_tk_vars(),
@@ -774,7 +785,6 @@ class Config():
             command_notebook=None)  # set in command.py
         self._user_config = UserConfig(None)
         self.session = session
-        self._default_font = tk.font.nametofont("TkDefaultFont").configure()["family"]
         logger.debug("Initialized %s", self.__class__.__name__)
 
     # Constants
@@ -883,6 +893,25 @@ class Config():
         scaling = dpi / 72.0
         logger.debug("dpi: %s, scaling: %s'", dpi, scaling)
         return scaling
+
+    @classmethod
+    def _set_default_font(cls):
+        """ Set the default font.
+
+        For macOS and Windows, this just pulls back the system default font.
+
+        For Linux, quite often the default is not ideal, so we try to pull a sane default from
+        installed fonts.
+        """
+        if platform.system() == "Linux":
+            for family in ("DejaVu Sans", "Noto Sans", "Nimbus Sans"):
+                if family in tk.font.families():
+                    logger.debug("Setting default font to: '%s'", family)
+                    tk.font.nametofont("TkDefaultFont").configure(family=family)
+                    tk.font.nametofont("TkHeadingFont").configure(family=family)
+                    tk.font.nametofont("TkMenuFont").configure(family=family)
+                    break
+        return tk.font.nametofont("TkDefaultFont").configure()["family"]
 
     def set_default_options(self):
         """ Set the default options for :mod:`lib.gui.projects`
@@ -1044,6 +1073,35 @@ class Config():
         title += " - {}".format(text) if text is not None and text else ""
         self.root.title(title)
 
+    def set_geometry(self, width, height, fullscreen=False):
+        """ Set the geometry for the root tkinter object.
+
+        Parameters
+        ----------
+        width: int
+            The width to set the window to (prior to scaling)
+        height: int
+            The height to set the window to (prior to scaling)
+        fullscreen: bool, optional
+            Whether to set the window to full-screen mode. If ``True`` then :attr:`width` and
+            :attr:`height` are ignored. Default: ``False``
+        """
+        self.root.tk.call("tk", "scaling", self.scaling_factor)
+        if fullscreen:
+            initial_dimensions = (self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        else:
+            initial_dimensions = (round(width * self.scaling_factor),
+                                  round(height * self.scaling_factor))
+
+        if fullscreen and sys.platform == "win32":
+            self.root.state('zoomed')
+        elif fullscreen:
+            self.root.attributes('-zoomed', True)
+        else:
+            self.root.geometry("{}x{}+80+80".format(str(initial_dimensions[0]),
+                                                    str(initial_dimensions[1])))
+        logger.debug("Geometry: %sx%s", *initial_dimensions)
+
 
 class LongRunningTask(Thread):
     """ Runs long running tasks in a background thread to prevent the GUI from becoming
@@ -1120,3 +1178,44 @@ class LongRunningTask(Thread):
         logger.debug("Got result from thread")
         self._config.set_cursor_default(widget=self._widget)
         return retval
+
+
+class PreviewTrigger():
+    """ Trigger to indicate to underlying Faceswap process that the preview image should
+    be updated.
+
+    Writes a file to the cache folder that is picked up by the main process.
+    """
+    def __init__(self):
+        logger.debug("Initializing: %s", self.__class__.__name__)
+        self._trigger_file = os.path.join(PATHCACHE, ".preview_trigger")
+        logger.debug("Initialized: %s (trigger_file: %s)",
+                     self.__class__.__name__, self._trigger_file)
+
+    def set(self):
+        """ Place the trigger file into the cache folder """
+        if not os.path.isfile(self._trigger_file):
+            with open(self._trigger_file, "w"):
+                pass
+            logger.debug("Set preview update trigger: %s", self._trigger_file)
+
+    def clear(self):
+        """ Remove the trigger file from the cache folder """
+        if os.path.isfile(self._trigger_file):
+            os.remove(self._trigger_file)
+            logger.debug("Removed preview update trigger: %s", self._trigger_file)
+
+
+def preview_trigger():
+    """ Set the global preview trigger if it has not always been set and return.
+
+    Returns
+    -------
+    :class:`PreviewTrigger`
+        The trigger to indicate to the main faceswap process that it should perform a training
+        preview update
+    """
+    global _PREVIEW_TRIGGER  # pylint:disable=global-statement
+    if _PREVIEW_TRIGGER is None:
+        _PREVIEW_TRIGGER = PreviewTrigger()
+    return _PREVIEW_TRIGGER

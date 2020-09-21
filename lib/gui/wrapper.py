@@ -11,7 +11,7 @@ from time import time
 
 import psutil
 
-from .utils import get_config, get_images, LongRunningTask
+from .utils import get_config, get_images, LongRunningTask, preview_trigger
 
 if os.name == "nt":
     import win32console  # pylint: disable=import-error
@@ -74,9 +74,9 @@ class ProcessWrapper():
             self.tk_vars["istraining"].set(True)
         print("Loading...")
 
-        self.statusbar.status_message.set("Executing - {}.py".format(self.command))
+        self.statusbar.message.set("Executing - {}.py".format(self.command))
         mode = "indeterminate" if self.command in ("effmpeg", "train") else "determinate"
-        self.statusbar.progress_start(mode)
+        self.statusbar.start(mode)
 
         args = self.build_args(category)
         self.tk_vars["display"].set(self.command)
@@ -126,11 +126,12 @@ class ProcessWrapper():
         self.tk_vars["runningtask"].set(False)
         if self.task.command == "train":
             self.tk_vars["istraining"].set(False)
-        self.statusbar.progress_stop()
-        self.statusbar.status_message.set(message)
+        self.statusbar.stop()
+        self.statusbar.message.set(message)
         self.tk_vars["display"].set(None)
         get_images().delete_preview()
         get_config().session.__init__()
+        preview_trigger().clear()
         self.command = None
         logger.debug("Terminated Faceswap processes")
         print("Process exited.")
@@ -188,19 +189,21 @@ class FaceswapControl():
                         (self.command == "effmpeg" and self.capture_ffmpeg(output)) or
                         (self.command not in ("train", "effmpeg") and self.capture_tqdm(output))):
                     continue
-                if (self.command == "train" and
-                        self.wrapper.tk_vars["istraining"].get() and
-                        "[saved models]" in output.strip().lower()):
-                    logger.debug("Trigger GUI Training update")
-                    logger.trace("tk_vars: %s", {itm: var.get()
-                                                 for itm, var in self.wrapper.tk_vars.items()})
-                    if not self.config.session.initialized:
-                        # Don't initialize session until after the first save as state
-                        # file must exist first
-                        logger.debug("Initializing curret training session")
-                        self.config.session.initialize_session(is_training=True)
-                    self.wrapper.tk_vars["updatepreview"].set(True)
-                    self.wrapper.tk_vars["refreshgraph"].set(True)
+                if self.command == "train" and self.wrapper.tk_vars["istraining"].get():
+                    if "[saved models]" in output.strip().lower():
+                        logger.debug("Trigger GUI Training update")
+                        logger.trace("tk_vars: %s", {itm: var.get()
+                                                     for itm, var in self.wrapper.tk_vars.items()})
+                        if not self.config.session.initialized:
+                            # Don't initialize session until after the first save as state
+                            # file must exist first
+                            logger.debug("Initializing curret training session")
+                            self.config.session.initialize_session(is_training=True)
+                        self.wrapper.tk_vars["updatepreview"].set(True)
+                        self.wrapper.tk_vars["refreshgraph"].set(True)
+                    if "[preview updated]" in output.strip().lower():
+                        self.wrapper.tk_vars["updatepreview"].set(True)
+                        continue
                 print(output.strip())
         returncode = self.process.poll()
         message = self.set_final_status(returncode)
@@ -222,6 +225,9 @@ class FaceswapControl():
                 break
             if output:
                 if self.command != "train" and self.capture_tqdm(output):
+                    continue
+                if self.command == "train" and output.startswith("Reading training images"):
+                    print(output.strip(), file=sys.stdout)
                     continue
                 print(output.strip(), file=sys.stderr)
         logger.debug("Terminated stderr reader")

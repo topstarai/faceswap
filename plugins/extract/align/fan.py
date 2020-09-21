@@ -5,8 +5,6 @@
 """
 import cv2
 import numpy as np
-import keras
-from keras import backend as K
 
 from lib.model.session import KSession
 from ._base import Aligner, logger
@@ -15,12 +13,12 @@ from ._base import Aligner, logger
 class Align(Aligner):
     """ Perform transformation to align and get landmarks """
     def __init__(self, **kwargs):
-        git_model_id = 9
-        model_filename = "face-alignment-network_2d4_keras_v1.h5"
+        git_model_id = 13
+        model_filename = "face-alignment-network_2d4_keras_v2.h5"
         super().__init__(git_model_id=git_model_id, model_filename=model_filename, **kwargs)
         self.name = "FAN"
         self.input_size = 256
-        self.colorformat = "RGB"
+        self.color_format = "RGB"
         self.vram = 2240
         self.vram_warnings = 512  # Will run at this with warnings
         self.vram_per_batch = 64
@@ -29,14 +27,13 @@ class Align(Aligner):
 
     def init_model(self):
         """ Initialize FAN model """
-        model_kwargs = dict(custom_objects={'TorchBatchNorm2D': TorchBatchNorm2D})
         self.model = KSession(self.name,
                               self.model_path,
-                              model_kwargs=model_kwargs,
-                              allow_growth=self.config["allow_growth"])
+                              allow_growth=self.config["allow_growth"],
+                              exclude_gpus=self._exclude_gpus)
         self.model.load_model()
         # Feed a placeholder so Aligner is primed for Manual tool
-        placeholder_shape = (self.batchsize, 3, self.input_size, self.input_size)
+        placeholder_shape = (self.batchsize, self.input_size, self.input_size, 3)
         placeholder = np.zeros(placeholder_shape, dtype="float32")
         self.model.predict(placeholder)
 
@@ -47,14 +44,13 @@ class Align(Aligner):
         faces = self.crop(batch)
         logger.trace("Aligned image around center")
         faces = self._normalize_faces(faces)
-        batch["feed"] = np.array(faces, dtype="float32")[..., :3].transpose((0, 3, 1, 2)) / 255.0
+        batch["feed"] = np.array(faces, dtype="float32")[..., :3] / 255.0
         return batch
 
     def get_center_scale(self, detected_faces):
         """ Get the center and set scale of bounding box """
         logger.debug("Calculating center and scale")
         center_scale = np.empty((len(detected_faces), 68, 3), dtype='float32')
-        # TODO modify detected face to hold this data as a matrix
         for index, face in enumerate(detected_faces):
             x_center = (face.left + face.right) / 2.0
             y_center = (face.top + face.bottom) / 2.0 - face.h * 0.12
@@ -79,19 +75,22 @@ class Align(Aligner):
 
         # TODO second pass .. convert to matrix
         new_images = []
-        for face, ul, br in zip(batch["detected_faces"], upper_left, bot_right):
-            height, width = face.image.shape[:2]
-            channels = 3 if face.image.ndim > 2 else 1
-            br_width, br_height = br[0].astype('int32')
-            ul_width, ul_height = ul[0].astype('int32')
-            new_dim = (br_height - ul_height, br_width - ul_width, channels)
+        for image, top_left, bottom_right in zip(batch["image"], upper_left, bot_right):
+            height, width = image.shape[:2]
+            channels = 3 if image.ndim > 2 else 1
+            bottom_right_width, bottom_right_height = bottom_right[0].astype('int32')
+            top_left_width, top_left_height = top_left[0].astype('int32')
+            new_dim = (bottom_right_height - top_left_height,
+                       bottom_right_width - top_left_width,
+                       channels)
             new_img = np.empty(new_dim, dtype=np.uint8)
 
-            new_x = slice(max(0, -ul_width), min(br_width, width) - ul_width)
-            new_y = slice(max(0, -ul_height), min(br_height, height) - ul_height)
-            old_x = slice(max(0, ul_width), min(br_width, width))
-            old_y = slice(max(0, ul_height), min(br_height, height))
-            new_img[new_y, new_x] = face.image[old_y, old_x]
+            new_x = slice(max(0, -top_left_width), min(bottom_right_width, width) - top_left_width)
+            new_y = slice(max(0, -top_left_height),
+                          min(bottom_right_height, height) - top_left_height)
+            old_x = slice(max(0, top_left_width), min(bottom_right_width, width))
+            old_y = slice(max(0, top_left_height), min(bottom_right_height, height))
+            new_img[new_y, new_x] = image[old_y, old_x]
 
             interp = cv2.INTER_CUBIC if new_dim[0] < self.input_size else cv2.INTER_AREA
             new_images.append(cv2.resize(new_img, dsize=sizes, interpolation=interp))
@@ -120,8 +119,10 @@ class Align(Aligner):
     def predict(self, batch):
         """ Predict the 68 point landmarks """
         logger.debug("Predicting Landmarks")
-        batch["prediction"] = self.model.predict(batch["feed"])[-1]
-        logger.trace([pred.shape for pred in batch["prediction"]])
+        # TODO Remove lazy transpose and change points from predict to use the correct
+        # order
+        batch["prediction"] = self.model.predict(batch["feed"])[-1].transpose(0, 3, 1, 2)
+        logger.trace(batch["prediction"].shape)
         return batch
 
     def process_output(self, batch):
@@ -148,83 +149,9 @@ class Align(Aligner):
                    (image_slice, landmark_slice, max_clipped[0], indices[1])]
         x_subpixel_shift = batch["prediction"][offsets[0]] - batch["prediction"][offsets[1]]
         y_subpixel_shift = batch["prediction"][offsets[2]] - batch["prediction"][offsets[3]]
-        # TODO improve rudimentary subpixel logic to centroid of 3x3 window algorithm
+        # TODO improve rudimentary sub-pixel logic to centroid of 3x3 window algorithm
         subpixel_landmarks[:, :, 0] = indices[1] + np.sign(x_subpixel_shift) * 0.25 + 0.5
         subpixel_landmarks[:, :, 1] = indices[0] + np.sign(y_subpixel_shift) * 0.25 + 0.5
 
         batch["landmarks"] = self.transform(subpixel_landmarks, batch["center_scale"], resolution)
         logger.trace("Obtained points from prediction: %s", batch["landmarks"])
-
-
-class TorchBatchNorm2D(keras.engine.base_layer.Layer):
-    # pylint:disable=too-many-instance-attributes
-    """" Required for FAN_keras model """
-    def __init__(self, axis=-1, momentum=0.99, epsilon=1e-3, **kwargs):
-        super(TorchBatchNorm2D, self).__init__(**kwargs)
-        self.supports_masking = True
-        self.axis = axis
-        self.momentum = momentum
-        self.epsilon = epsilon
-        self._epsilon_const = K.constant(self.epsilon, dtype='float32')
-
-        self.built = False
-        self.gamma = None
-        self.beta = None
-        self.moving_mean = None
-        self.moving_variance = None
-
-    def build(self, input_shape):
-        dim = input_shape[self.axis]
-        if dim is None:
-            raise ValueError("Axis {} of input tensor should have a "
-                             "defined dimension but the layer received "
-                             "an input with  shape {}."
-                             .format(str(self.axis), str(input_shape)))
-        shape = (dim,)
-        self.gamma = self.add_weight(shape=shape,
-                                     name='gamma',
-                                     initializer='ones',
-                                     regularizer=None,
-                                     constraint=None)
-        self.beta = self.add_weight(shape=shape,
-                                    name='beta',
-                                    initializer='zeros',
-                                    regularizer=None,
-                                    constraint=None)
-        self.moving_mean = self.add_weight(shape=shape,
-                                           name='moving_mean',
-                                           initializer='zeros',
-                                           trainable=False)
-        self.moving_variance = self.add_weight(shape=shape,
-                                               name='moving_variance',
-                                               initializer='ones',
-                                               trainable=False)
-        self.built = True
-
-    def call(self, inputs, **kwargs):
-        input_shape = K.int_shape(inputs)
-
-        broadcast_shape = [1] * len(input_shape)
-        broadcast_shape[self.axis] = input_shape[self.axis]
-
-        broadcast_moving_mean = K.reshape(self.moving_mean, broadcast_shape)
-        broadcast_moving_variance = K.reshape(self.moving_variance,
-                                              broadcast_shape)
-        broadcast_gamma = K.reshape(self.gamma, broadcast_shape)
-        broadcast_beta = K.reshape(self.beta, broadcast_shape)
-        invstd = (
-            K.ones(shape=broadcast_shape, dtype='float32')
-            / K.sqrt(broadcast_moving_variance + self._epsilon_const)
-        )
-
-        return((inputs - broadcast_moving_mean)
-               * invstd
-               * broadcast_gamma
-               + broadcast_beta)
-
-    def get_config(self):
-        config = {'axis': self.axis,
-                  'momentum': self.momentum,
-                  'epsilon': self.epsilon}
-        base_config = super(TorchBatchNorm2D, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))

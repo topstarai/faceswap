@@ -70,6 +70,15 @@ check_for_sudo() {
     fi
 }
 
+check_for_curl() {
+    # Ensure that curl is available on the system
+    if ! command -V curl &> /dev/null ; then
+        error "'curl' is required for running the Faceswap installer, but could not be found. \
+        Please install 'curl' using the package manager for your distribution before proceeding."
+        exit 1
+    fi
+}
+
 create_tmp_dir() {
     TMP_DIR="$(mktemp -d)"
     if [ -z "$TMP_DIR" -o ! -d "$TMP_DIR" ]; then
@@ -336,10 +345,10 @@ delete_env() {
 }
 
 create_env() {
-    # Create Python 3.6 env for faceswap
+    # Create Python 3.8 env for faceswap
     delete_env
     info "Creating Conda Virtual Environment..."
-    yellow ; "$CONDA_EXECUTABLE" create -n "$ENV_NAME" -q python=3.6 -y
+    yellow ; "$CONDA_EXECUTABLE" create -n "$ENV_NAME" -q python=3.8 -y
 }
 
 
@@ -378,17 +387,20 @@ setup_faceswap() {
     python "$DIR_FACESWAP/setup.py" --installer $args
 }
 
+create_gui_launcher () {
+    # Create a shortcut to launch into the GUI
+    launcher="$DIR_FACESWAP/faceswap_gui_launcher.sh"
+    launch_script="source \"$DIR_CONDA/etc/profile.d/conda.sh\" activate &&\n"
+    launch_script+="conda activate '$ENV_NAME' &&\n"
+    launch_script+="python \"$DIR_FACESWAP/faceswap.py\" gui\n"
+    echo -e "$launch_script" > "$launcher"
+    chmod +x "$launcher"
+}
+
 create_desktop_shortcut () {
     # Create a shell script to launch the GUI and add a desktop shortcut
     if $DESKTOP ; then
-        launcher="$DIR_FACESWAP/faceswap_gui_launcher.sh"
         desktop_icon="$HOME/Desktop/faceswap.desktop"
-        launch_script="source \"$DIR_CONDA/etc/profile.d/conda.sh\" activate &&\n"
-        launch_script+="conda activate '$ENV_NAME' &&\n"
-        launch_script+="python \"$DIR_FACESWAP/faceswap.py\" gui\n"
-        echo -e "$launch_script" > "$launcher"
-        chmod +x "$launcher"
-
         desktop_file="[Desktop Entry]\n"
         desktop_file+="Version=1.0\n"
         desktop_file+="Type=Application\n"
@@ -403,6 +415,7 @@ create_desktop_shortcut () {
 }
 
 check_for_sudo
+check_for_curl
 banner
 user_input
 review
@@ -413,6 +426,7 @@ activate_env
 install_git
 clone_faceswap
 setup_faceswap
+create_gui_launcher
 create_desktop_shortcut
 info "Faceswap installation is complete!"
 if $DESKTOP ; then info "You can launch Faceswap from the icon on your desktop" ; exit ; fi
