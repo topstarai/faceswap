@@ -44,6 +44,24 @@ class Config(FaceswapConfig):
                          info="Options that apply to all models" + ADDITIONAL_INFO)
         self.add_item(
             section=section,
+            title="centering",
+            datatype=str,
+            gui_radio=True,
+            default="face",
+            choices=["face", "legacy"],
+            fixed=True,
+            group="face",
+            info="How to center the training image. The extracted images are centered on the "
+                 "middle of the skull based on the face's estimated pose. A subsection of these "
+                 "images are used for training. The centering used dictates how this subsection "
+                 "will be cropped from the aligned images."
+                 "\n\tface: Centers the training image on the center of the face, adjusting for "
+                 "pitch and yaw."
+                 "\n\tlegacy: The 'original' extraction technique. Centers the training image "
+                 "near the tip of the nose with no adjustment. Can result in the edges of the "
+                 "face appearing outside of the training area.")
+        self.add_item(
+            section=section,
             title="coverage",
             datatype=float,
             default=68.75,
@@ -54,8 +72,9 @@ class Config(FaceswapConfig):
             info="How much of the extracted image to train on. A lower coverage will limit the "
                  "model's scope to a zoomed-in central area while higher amounts can include the "
                  "entire face. A trade-off exists between lower amounts given more detail "
-                 "versus higher amounts avoiding noticeable swap transitions. Sensible values to "
-                 "use are:"
+                 "versus higher amounts avoiding noticeable swap transitions. For 'Face' "
+                 "centering you will want to leave this above 75%. Sensible values for 'Legacy' "
+                 "centering are:"
                  "\n\t62.5%% spans from eyebrow to eyebrow."
                  "\n\t75.0%% spans from temple to temple."
                  "\n\t87.5%% spans from ear to ear."
@@ -148,7 +167,7 @@ class Config(FaceswapConfig):
             datatype=bool,
             default=False,
             group="network",
-            info="R|[Nvidia Only], NVIDIA GPUs can run operations in float16 faster than in "
+            info="[Nvidia Only], NVIDIA GPUs can run operations in float16 faster than in "
                  "float32. Mixed precision allows you to use a mix of float16 with float32, to "
                  "get the performance benefits from float16 and the numeric stability benefits "
                  "from float32.\n\nWhile mixed precision will run on most Nvidia models, it will "
@@ -271,7 +290,7 @@ class Config(FaceswapConfig):
             group="loss",
             min_max=(1, 40),
             rounding=1,
-            default=6,
+            default=3,
             fixed=False,
             info="The amount of priority to give to the eyes.\n\nThe value given here is as a "
                  "multiplier of the main loss score. For example:"
@@ -286,7 +305,7 @@ class Config(FaceswapConfig):
             group="loss",
             min_max=(1, 40),
             rounding=1,
-            default=4,
+            default=2,
             fixed=False,
             info="The amount of priority to give to the mouth.\n\nThe value given here is as a "
                  "multiplier of the main loss score. For Example:"

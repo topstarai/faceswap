@@ -24,7 +24,7 @@ _PREVIEW_TRIGGER = None
 PATHCACHE = os.path.join(os.path.realpath(os.path.dirname(sys.argv[0])), "lib", "gui", ".cache")
 
 
-def initialize_config(root, cli_opts, statusbar, session):
+def initialize_config(root, cli_opts, statusbar):
     """ Initialize the GUI Master :class:`Config` and add to global constant.
 
     This should only be called once on first GUI startup. Future access to :class:`Config`
@@ -38,15 +38,13 @@ def initialize_config(root, cli_opts, statusbar, session):
         The command line options object
     statusbar: :class:`lib.gui.custom_widgets.StatusBar`
         The GUI Status bar
-    session: :class:`lib.gui.stats.Session`
-        The current training Session
     """
     global _CONFIG  # pylint: disable=global-statement
     if _CONFIG is not None:
         return None
     logger.debug("Initializing config: (root: %s, cli_opts: %s, "
-                 "statusbar: %s, session: %s)", root, cli_opts, statusbar, session)
-    _CONFIG = Config(root, cli_opts, statusbar, session)
+                 "statusbar: %s)", root, cli_opts, statusbar)
+    _CONFIG = Config(root, cli_opts, statusbar)
     return _CONFIG
 
 
@@ -173,13 +171,19 @@ class FileHandler():  # pylint:disable=too-few-public-methods
                                ("WebM", "*.webm"),
                                ("Windows Media Video", "*.wmv"),
                                all_files]}
-        # Add in multi-select options
-        for key, val in filetypes.items():
-            if len(val) < 3:
-                continue
-            multi = ["{} Files".format(key.title())]
-            multi.append(" ".join([ftype[1] for ftype in val if ftype[0] != "All files"]))
-            val.insert(0, tuple(multi))
+
+        # Add in multi-select options and upper case extensions for Linux
+        for key in filetypes:
+            if platform.system() == "Linux":
+                filetypes[key] = [item
+                                  if item[0] == "All files"
+                                  else (item[0], "{} {}".format(item[1], item[1].upper()))
+                                  for item in filetypes[key]]
+            if len(filetypes[key]) > 2:
+                multi = ["{} Files".format(key.title())]
+                multi.append(" ".join([ftype[1]
+                                       for ftype in filetypes[key] if ftype[0] != "All files"]))
+                filetypes[key].insert(0, tuple(multi))
         return filetypes
 
     @property
@@ -490,7 +494,6 @@ class Images():
         gui_preview = os.path.join(self._pathoutput, ".gui_preview.jpg")
         if not image_files or (len(image_files) == 1 and gui_preview not in image_files):
             logger.debug("No preview to display")
-            self._previewoutput = None
             return
         # Filter to just the gui_preview if it exists in folder output
         image_files = [gui_preview] if gui_preview in image_files else image_files
@@ -764,13 +767,11 @@ class Config():
         The command line options object
     statusbar: :class:`lib.gui.custom_widgets.StatusBar`
         The GUI Status bar
-    session: :class:`lib.gui.stats.Session`
-        The current training Session
     """
-    def __init__(self, root, cli_opts, statusbar, session):
-        logger.debug("Initializing %s: (root %s, cli_opts: %s, statusbar: %s, session: %s)",
-                     self.__class__.__name__, root, cli_opts, statusbar, session)
-        self._default_font = self._set_default_font()
+    def __init__(self, root, cli_opts, statusbar):
+        logger.debug("Initializing %s: (root %s, cli_opts: %s, statusbar: %s)",
+                     self.__class__.__name__, root, cli_opts, statusbar)
+        self._default_font = tk.font.nametofont("TkDefaultFont").configure()["family"]
         self._constants = dict(
             root=root,
             scaling_factor=self._get_scaling(root),
@@ -784,7 +785,6 @@ class Config():
             status_bar=statusbar,
             command_notebook=None)  # set in command.py
         self._user_config = UserConfig(None)
-        self.session = session
         logger.debug("Initialized %s", self.__class__.__name__)
 
     # Constants
@@ -893,25 +893,6 @@ class Config():
         scaling = dpi / 72.0
         logger.debug("dpi: %s, scaling: %s'", dpi, scaling)
         return scaling
-
-    @classmethod
-    def _set_default_font(cls):
-        """ Set the default font.
-
-        For macOS and Windows, this just pulls back the system default font.
-
-        For Linux, quite often the default is not ideal, so we try to pull a sane default from
-        installed fonts.
-        """
-        if platform.system() == "Linux":
-            for family in ("DejaVu Sans", "Noto Sans", "Nimbus Sans"):
-                if family in tk.font.families():
-                    logger.debug("Setting default font to: '%s'", family)
-                    tk.font.nametofont("TkDefaultFont").configure(family=family)
-                    tk.font.nametofont("TkHeadingFont").configure(family=family)
-                    tk.font.nametofont("TkMenuFont").configure(family=family)
-                    break
-        return tk.font.nametofont("TkDefaultFont").configure()["family"]
 
     def set_default_options(self):
         """ Set the default options for :mod:`lib.gui.projects`
@@ -1037,9 +1018,6 @@ class Config():
         refreshgraph = tk.BooleanVar()
         refreshgraph.set(False)
 
-        smoothgraph = tk.DoubleVar()
-        smoothgraph.set(0.90)
-
         updatepreview = tk.BooleanVar()
         updatepreview.set(False)
 
@@ -1053,7 +1031,6 @@ class Config():
                    "generate": generatecommand,
                    "consoleclear": consoleclear,
                    "refreshgraph": refreshgraph,
-                   "smoothgraph": smoothgraph,
                    "updatepreview": updatepreview,
                    "analysis_folder": analysis_folder}
         logger.debug(tk_vars)
@@ -1093,7 +1070,7 @@ class Config():
             initial_dimensions = (round(width * self.scaling_factor),
                                   round(height * self.scaling_factor))
 
-        if fullscreen and sys.platform == "win32":
+        if fullscreen and sys.platform in ("win32", "darwin"):
             self.root.state('zoomed')
         elif fullscreen:
             self.root.attributes('-zoomed', True)

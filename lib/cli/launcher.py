@@ -47,37 +47,63 @@ class ScriptExecutor():  # pylint:disable=too-few-public-methods
         script = getattr(module, self._command.title())
         return script
 
-    @staticmethod
-    def _test_for_tf_version():
+    def _test_for_tf_version(self):
         """ Check that the required Tensorflow version is installed.
 
         Raises
         ------
         FaceswapError
-            If Tensorflow is not found, or is not between versions 2.2 and 2.2
+            If Tensorflow is not found, or is not between versions 2.2 and 2.4
         """
         min_ver = 2.2
-        max_ver = 2.2
+        max_ver = 2.4
         try:
             # Ensure tensorflow doesn't pin all threads to one core when using Math Kernel Library
             os.environ["TF_MIN_GPU_MULTIPROCESSOR_COUNT"] = "4"
             os.environ["KMP_AFFINITY"] = "disabled"
             import tensorflow as tf  # pylint:disable=import-outside-toplevel
         except ImportError as err:
-            raise FaceswapError("There was an error importing Tensorflow. This is most likely "
-                                "because you do not have TensorFlow installed, or you are trying "
-                                "to run tensorflow-gpu on a system without an Nvidia graphics "
-                                "card. Original import error: {}".format(str(err)))
+            if "DLL load failed while importing" in str(err):
+                msg = (
+                    "A DLL library file failed to load. Make sure that you have Microsoft Visual "
+                    "C++ Redistributable (2015, 2017, 2019) installed for your machine from: "
+                    "https://support.microsoft.com/en-gb/help/2977003")
+            else:
+                msg = (
+                    "There was an error importing Tensorflow. This is most likely because you do "
+                    "not have TensorFlow installed, or you are trying to run tensorflow-gpu on a "
+                    "system without an Nvidia graphics card. Original import "
+                    "error: {}".format(str(err)))
+            self._handle_import_error(msg)
+
         tf_ver = float(".".join(tf.__version__.split(".")[:2]))  # pylint:disable=no-member
         if tf_ver < min_ver:
-            raise FaceswapError("The minimum supported Tensorflow is version {} but you have "
-                                "version {} installed. Please upgrade Tensorflow.".format(
-                                    min_ver, tf_ver))
+            msg = ("The minimum supported Tensorflow is version {} but you have version {} "
+                   "installed. Please upgrade Tensorflow.".format(min_ver, tf_ver))
+            self._handle_import_error(msg)
         if tf_ver > max_ver:
-            raise FaceswapError("The maximumum supported Tensorflow is version {} but you have "
-                                "version {} installed. Please downgrade Tensorflow.".format(
-                                    max_ver, tf_ver))
+            msg = ("The maximum supported Tensorflow is version {} but you have version {} "
+                   "installed. Please downgrade Tensorflow.".format(max_ver, tf_ver))
+            self._handle_import_error(msg)
         logger.debug("Installed Tensorflow Version: %s", tf_ver)
+
+    @classmethod
+    def _handle_import_error(cls, message):
+        """ Display the error message to the console and wait for user input to dismiss it, if
+        running GUI under Windows, otherwise use standard error handling.
+
+        Parameters
+        ----------
+        message: str
+            The error message to display
+        """
+        if "gui" in sys.argv and platform.system() == "Windows":
+            logger.error(message)
+            logger.info("Press \"ENTER\" to dismiss the message and close FaceSwap")
+            input()
+            sys.exit(1)
+        else:
+            raise FaceswapError(message)
 
     def _test_for_gui(self):
         """ If running the gui, performs check to ensure necessary prerequisites are present. """
@@ -199,12 +225,6 @@ class ScriptExecutor():  # pylint:disable=too-few-public-methods
                 sys.exit(1)
             arguments.exclude_gpus = [int(idx) for idx in arguments.exclude_gpus]
             set_exclude_devices(arguments.exclude_gpus)
-
-        if ((get_backend() == "cpu" or GPUStats().exclude_all_devices) and
-                (self._command == "extract" and arguments.detector == "s3fd")):
-            logger.error("Extracting on CPU is not currently for detector: '%s'",
-                         arguments.detector.upper())
-            sys.exit(0)
 
         if GPUStats().exclude_all_devices and get_backend() != "cpu":
             msg = "Switching backend to CPU"

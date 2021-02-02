@@ -133,7 +133,7 @@ class Manual(tk.Tk):
         logger.debug("Initializing tkinter")
         for widget in ("TButton", "TCheckbutton", "TRadiobutton"):
             self.unbind_class(widget, "<Key-space>")
-        initialize_config(self, None, None, None)
+        initialize_config(self, None, None)
         initialize_images()
         get_config().set_geometry(940, 600, fullscreen=True)
         self.title("Faceswap.py - Visual Alignments")
@@ -685,7 +685,7 @@ class Aligner():
         Parameters
         ----------
         detected_faces: :class:`~tools.manual.detected_faces.DetectedFaces`
-            The class that holds the :class:`~lib.faces_detect.DetectedFace` objects for the
+            The class that holds the :class:`~lib.align.DetectedFace` objects for the
             current Manual session
         """
         logger.debug("Linking detected_faces: %s", detected_faces)
